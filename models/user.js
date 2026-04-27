@@ -9,10 +9,12 @@ const User = sequelize.define("User", {
   password: DataTypes.STRING,
 
   lockUntil: DataTypes.DATE,
-  lockCount: {  
+
+  lockCount: {
     type: DataTypes.INTEGER,
     defaultValue: 0,
   },
+
   isBlocked: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
