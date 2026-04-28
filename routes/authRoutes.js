@@ -1,12 +1,13 @@
 const express = require("express");
 const router = express.Router();
 
-const { login } = require("../controllers/authController");
+const { login, register } = require("../controllers/authController");
 const { verifyToken } = require("../middleware/authMiddleware");
 const { allowRoles } = require("../middleware/roleMiddleware");
 
 // 🔓 Public route
 router.post("/login", login);
+router.post("/register", register);
 
 // 🔐 Protected (any logged-in user)
 router.get("/profile", verifyToken, (req, res) => {
