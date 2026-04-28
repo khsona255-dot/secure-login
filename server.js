@@ -5,7 +5,7 @@ require("dotenv").config();
 
 const User = require("./models/user");
 
-sequelize.sync().then(async () => {
+sequelize.sync({ alter: true }).then(async () => {
   console.log("Database synced");
 
   const existingUser = await User.findOne({
@@ -18,6 +18,7 @@ sequelize.sync().then(async () => {
     await User.create({
       email: "test@gmail.com",
       password: hash,
+      role: "admin", // ✅ optional (good for testing RBAC)
     });
 
     console.log("Test user created ✅");

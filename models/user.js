@@ -6,7 +6,13 @@ const User = sequelize.define("User", {
     type: DataTypes.STRING,
     unique: true,
   },
+
   password: DataTypes.STRING,
+
+  role: {
+    type: DataTypes.STRING,
+    defaultValue: "user",
+  },
 
   lockUntil: DataTypes.DATE,
 
@@ -18,6 +24,15 @@ const User = sequelize.define("User", {
   isBlocked: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
+  },
+
+  throttleCount: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+  },
+
+  nextAllowedAt: {
+    type: DataTypes.DATE,
   },
 });
 

@@ -1,7 +1,8 @@
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 const User = require("../models/user");
 const LoginAttempt = require("../models/loginAttempt");
-const sendMail = require("../utils/mail"); // ✅ FIXED IMPORT
+const sendMail = require("../utils/mail");
 const { Op } = require("sequelize");
 
 exports.loginService = async ({ email, password, ip }) => {
@@ -11,14 +12,28 @@ exports.loginService = async ({ email, password, ip }) => {
 
   const now = new Date();
 
-  // ❌ Permanent block
+  // 🔒 Permanent block
   if (user.isBlocked) {
-    throw { code: 403, message: "Your account has been locked, please contact support" };
+    throw {
+      code: 403,
+      message: "Your account has been locked, please contact support",
+    };
   }
 
   // ⏳ Temporary lock
   if (user.lockUntil && user.lockUntil > now) {
-    throw { code: 429, message: "Your account has been blocked, try again later" };
+    throw {
+      code: 429,
+      message: "Your account has been blocked, try again later",
+    };
+  }
+
+  // ⛔ Throttle delay
+  if (user.nextAllowedAt && user.nextAllowedAt > now) {
+    throw {
+      code: 429,
+      message: "Too many attempts. Please wait before trying again",
+    };
   }
 
   const isMatch = await bcrypt.compare(password, user.password);
@@ -31,10 +46,11 @@ exports.loginService = async ({ email, password, ip }) => {
       status: "failed",
     });
 
-    // 🔴 15 min window (lock condition)
+    // 🔴 15 min window
     const attempts15 = await LoginAttempt.count({
       where: {
         userId: user.id,
+        ipAddress: ip,
         status: "failed",
         createdAt: {
           [Op.gte]: new Date(Date.now() - 15 * 60 * 1000),
@@ -42,37 +58,60 @@ exports.loginService = async ({ email, password, ip }) => {
       },
     });
 
+    // 🚨 LOCK
     if (attempts15 >= 10) {
       user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
+      user.lockCount += 1;
 
-      user.lockCount = (user.lockCount || 0) + 1;
+      await LoginAttempt.create({
+        userId: user.id,
+        ipAddress: ip,
+        status: "lock",
+      });
+
+      // 🔥 24h escalation
+      const lockCount24h = await LoginAttempt.count({
+        where: {
+          userId: user.id,
+          status: "lock",
+          createdAt: {
+            [Op.gte]: new Date(Date.now() - 24 * 60 * 60 * 1000),
+          },
+        },
+      });
 
       await sendMail(
         user.email,
         "Account Locked",
-        "Too many failed login attempts. Try again after 15 minutes."
+        "Too many failed attempts. Try again after 15 minutes."
       );
 
-      // 🔥 Escalation
-      if (user.lockCount >= 3) {
+      if (lockCount24h >= 3) {
         user.isBlocked = true;
 
         await sendMail(
           user.email,
           "Account Permanently Locked",
-          "Your account has been permanently blocked. Contact support."
+          "Contact support to unlock your account."
         );
       }
 
+      user.throttleCount = 0;
+      user.nextAllowedAt = null;
+
       await user.save();
 
-      throw { code: 403, message: "Your account has been locked, try again later" };
+      throw {
+        code: 403,
+        message: "Your account has been locked, try again later",
+      };
     }
 
     // 🟡 5 min throttling
     const attempts5 = await LoginAttempt.count({
       where: {
         userId: user.id,
+        ipAddress: ip,
         status: "failed",
         createdAt: {
           [Op.gte]: new Date(Date.now() - 5 * 60 * 1000),
@@ -81,11 +120,17 @@ exports.loginService = async ({ email, password, ip }) => {
     });
 
     if (attempts5 >= 5) {
-      const delay = Math.pow(2, user.lockCount || 0) * 30000;
+      user.throttleCount += 1;
+
+      const delay = 30000 * Math.pow(2, user.throttleCount - 1);
+
+      user.nextAllowedAt = new Date(Date.now() + delay);
+
+      await user.save();
 
       throw {
         code: 429,
-        message: `Too many attempts. Wait ${delay / 1000}s`,
+        message: `Too many attempts. Try again after ${delay / 1000}s`,
       };
     }
 
@@ -100,9 +145,24 @@ exports.loginService = async ({ email, password, ip }) => {
   });
 
   user.lockUntil = null;
+  user.throttleCount = 0;
   user.nextAllowedAt = null;
 
   await user.save();
 
-  return { message: "Login successful" };
+  // 🔐 JWT TOKEN
+  const token = jwt.sign(
+    {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: "1h" }
+  );
+
+  return {
+    message: "Login successful",
+    token,
+  };
 };
